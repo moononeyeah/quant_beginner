@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from config import DEFAULT_ROTATION_LOOKBACK_DAYS
 from src.strategy_base import CtaTemplate
 from .cta_presets import (
     AtrRsiStrategy,
@@ -37,6 +38,8 @@ class StrategySpec:
     def default_parameters(self) -> dict[str, Any]:
         if self.strategy_class:
             return self.strategy_class.get_class_parameters()
+        if self.key == "rotation":
+            return {"lookback_days": DEFAULT_ROTATION_LOOKBACK_DAYS}
         return {}
 
 
@@ -158,6 +161,46 @@ STRATEGY_SPECS: dict[str, StrategySpec] = {
 }
 
 
+PARAMETER_DESCRIPTIONS: dict[str, str] = {
+    "symbol": "单标的回测代码。股票或 ETF 代码，例如 510300。",
+    "rotation_symbols": "ETF 轮动池。轮动策略会在这些代码里选择近期表现最强的品种。",
+    "frequency": "K 线周期。daily 表示日线，数字表示分钟线。",
+    "start": "回测开始时间。日线使用 YYYYMMDD，分钟线使用 YYYY-MM-DD HH:MM:SS。",
+    "end": "回测结束时间。格式与开始时间一致。",
+    "initial_cash": "初始资金。用于计算资金曲线、收益率和仓位价值。",
+    "fee_rate": "手续费率。0.0003 代表成交金额的万分之三。",
+    "slippage": "滑点。模拟成交价格相对委托价格的不利偏移。",
+    "atr_length": "ATR 计算窗口。数值越大，对波动变化越不敏感。",
+    "atr_ma_length": "ATR 均线窗口。用于判断当前波动是否高于近期平均波动。",
+    "rsi_length": "RSI 计算窗口。数值越小，动量信号越敏感。",
+    "rsi_entry": "RSI 入场阈值偏移。买入阈值为 50 加该值，卖出阈值为 50 减该值。",
+    "trailing_percent": "移动止损百分比。持仓盈利后，价格从高点或低点回撤超过该比例时止损。",
+    "fixed_size": "每次下单数量。数值越大，单次交易仓位越重。",
+    "boll_window": "布林带计算窗口。用于统计中轨和波动区间。",
+    "boll_dev": "布林带标准差倍数。数值越大，突破条件越严格。",
+    "cci_window": "CCI 计算窗口。用于判断价格偏离程度。",
+    "atr_window": "ATR 波动窗口。用于计算止损距离或通道波动。",
+    "sl_multiplier": "止损 ATR 倍数。数值越大，止损距离越宽。",
+    "fast_window": "快均线窗口。数值越小，越快反映近期价格变化。",
+    "slow_window": "慢均线窗口。数值越大，越偏向长期趋势。",
+    "k1": "Dual Thrust 多头突破系数。数值越大，多头入场价越高。",
+    "k2": "Dual Thrust 空头突破系数。数值越大，空头入场价越低。",
+    "kk_length": "Keltner 通道窗口。用于计算通道中轴和波动范围。",
+    "kk_dev": "Keltner 通道宽度倍数。数值越大，突破条件越严格。",
+    "rsi_window": "RSI 计算窗口。用于衡量上涨和下跌动量强弱。",
+    "rsi_level": "RSI 信号阈值。决定多空信号触发的强度要求。",
+    "cci_level": "CCI 信号阈值。决定价格偏离达到多大才触发信号。",
+    "rsi_signal": "RSI 信号偏移。买入阈值为 50 加该值，卖出阈值为 50 减该值。",
+    "test_trigger": "测试策略触发间隔。每隔多少根 K 线执行一次测试动作。",
+    "entry_window": "唐奇安入场通道窗口。突破该窗口高低点时尝试入场。",
+    "exit_window": "唐奇安出场通道窗口。跌破或突破该窗口边界时离场。",
+    "trend_window": "长期趋势均线窗口。价格高于该均线时才允许做多。",
+    "rsi_exit": "RSI 离场阈值。RSI 转弱到该值附近时退出多头。",
+    "stop_loss_percent": "固定止损百分比。价格相对入场价亏损超过该比例时离场。",
+    "lookback_days": "轮动回看天数。策略比较最近 N 个交易日涨幅，选择涨幅最高的 ETF。",
+}
+
+
 def get_strategy_spec(strategy_key: str) -> StrategySpec:
     spec = STRATEGY_SPECS.get(strategy_key)
     if not spec:
@@ -172,6 +215,7 @@ def get_strategy_parameter_table(strategy_key: str) -> pd.DataFrame:
             "参数名": name,
             "默认值": value,
             "类型": type(value).__name__,
+            "中文解释": PARAMETER_DESCRIPTIONS.get(name, "策略参数。可结合策略源码理解具体用途。"),
         }
         for name, value in spec.default_parameters.items()
     ]

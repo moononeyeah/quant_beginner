@@ -18,11 +18,21 @@ from config import (
 )
 from main import run_optimization_pipeline, run_pipeline
 from src.plotter import plot_performance_dashboard
-from src.strategies import STRATEGY_SPECS, get_strategy_parameter_table, get_strategy_source, get_strategy_spec, list_strategy_catalog
+from src.strategies import (
+    PARAMETER_DESCRIPTIONS,
+    STRATEGY_SPECS,
+    get_strategy_parameter_table,
+    get_strategy_source,
+    get_strategy_spec,
+    list_strategy_catalog,
+)
 from src.utils import format_percent, friendly_error
 
 
 DISPLAY_TO_KEY = {spec.display_name: key for key, spec in STRATEGY_SPECS.items()}
+PARAMETER_TABLE_COLUMNS = ["参数名", "当前值", "类型", "中文解释"]
+
+APP_CSS = ""
 
 
 def _pretty_json(data: dict[str, Any]) -> str:
@@ -134,6 +144,101 @@ def _parse_json_dict(raw: str, field_name: str) -> dict[str, Any]:
     return value
 
 
+def _format_parameter_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _coerce_parameter_value(raw: Any, default_value: Any, name: str) -> Any:
+    text = "" if raw is None else str(raw).strip()
+    if text == "":
+        raise ValueError(f"参数 {name} 不能为空")
+
+    if isinstance(default_value, bool):
+        lowered = text.lower()
+        if lowered in {"true", "1", "yes", "y", "是", "开"}:
+            return True
+        if lowered in {"false", "0", "no", "n", "否", "关"}:
+            return False
+        raise ValueError(f"参数 {name} 必须是布尔值：true/false")
+    if isinstance(default_value, int) and not isinstance(default_value, bool):
+        try:
+            return int(float(text))
+        except ValueError as exc:
+            raise ValueError(f"参数 {name} 必须是整数") from exc
+    if isinstance(default_value, float):
+        try:
+            return float(text)
+        except ValueError as exc:
+            raise ValueError(f"参数 {name} 必须是数字") from exc
+    return text
+
+
+def _strategy_parameter_editor_table(strategy_key: str, strategy_params_json: str) -> pd.DataFrame:
+    spec = get_strategy_spec(strategy_key)
+    defaults = spec.default_parameters
+    current = defaults.copy()
+    current.update(_parse_json_dict(strategy_params_json, "策略参数"))
+    rows = [
+        {
+            "参数名": name,
+            "当前值": _format_parameter_value(current.get(name, default_value)),
+            "类型": type(default_value).__name__,
+            "中文解释": PARAMETER_DESCRIPTIONS.get(name, "策略参数。可结合策略源码理解具体用途。"),
+        }
+        for name, default_value in defaults.items()
+    ]
+    return pd.DataFrame(rows, columns=PARAMETER_TABLE_COLUMNS)
+
+
+def _strategy_parameter_help_markdown(strategy_key: str, strategy_params_json: str) -> str:
+    spec = get_strategy_spec(strategy_key)
+    defaults = spec.default_parameters
+    try:
+        current = defaults.copy()
+        current.update(_parse_json_dict(strategy_params_json, "策略参数"))
+    except ValueError:
+        current = defaults
+
+    if not defaults:
+        return "当前策略没有额外策略参数。"
+
+    lines = ["#### 策略参数中文解释"]
+    for name, default_value in defaults.items():
+        value = _format_parameter_value(current.get(name, default_value))
+        description = PARAMETER_DESCRIPTIONS.get(name, "策略参数。可结合策略源码理解具体用途。")
+        lines.append(f"- `{name}`：当前值 `{value}`，类型 `{type(default_value).__name__}`。{description}")
+    return "\n".join(lines)
+
+
+def _parameter_table_to_dict(strategy_key: str, table: Any) -> dict[str, Any]:
+    spec = get_strategy_spec(strategy_key)
+    defaults = spec.default_parameters
+    if not defaults:
+        return {}
+
+    if isinstance(table, pd.DataFrame):
+        df = table.copy()
+    else:
+        df = pd.DataFrame(table or [], columns=PARAMETER_TABLE_COLUMNS)
+
+    if "参数名" not in df.columns or "当前值" not in df.columns:
+        raise ValueError("策略参数表缺少“参数名”或“当前值”列")
+
+    params: dict[str, Any] = {}
+    for _, row in df.iterrows():
+        name = str(row.get("参数名", "")).strip()
+        if not name:
+            continue
+        if name not in defaults:
+            raise ValueError(f"未知策略参数：{name}")
+        params[name] = _coerce_parameter_value(row.get("当前值"), defaults[name], name)
+    for name, default_value in defaults.items():
+        params.setdefault(name, default_value)
+    return params
+
+
 def update_frequency_inputs(frequency: str):
     start_value, end_value = _default_dates_for_frequency(frequency)
     placeholder = "YYYYMMDD" if frequency == "daily" else "YYYY-MM-DD HH:MM:SS"
@@ -165,7 +270,23 @@ def update_strategy_inputs(strategy_label: str, frequency: str):
         gr.update(value=get_strategy_parameter_table(strategy_key)),
         gr.update(value=source_file),
         gr.update(value=source_code),
+        gr.update(value=_strategy_parameter_editor_table(strategy_key, params_json)),
     )
+
+
+def open_parameter_modal(
+    strategy_label: str,
+    strategy_params_json: str,
+):
+    strategy_key = DISPLAY_TO_KEY[strategy_label]
+    return (
+        gr.update(visible=True),
+        _strategy_parameter_editor_table(strategy_key, strategy_params_json),
+    )
+
+
+def close_parameter_modal():
+    return gr.update(visible=False)
 
 
 def run_gradio_backtest(
@@ -211,6 +332,54 @@ def run_gradio_backtest(
         return message, None, None, None, empty, empty, empty, empty, logs_df
 
 
+def run_gradio_backtest_from_modal(
+    strategy_label: str,
+    symbol: str,
+    rotation_symbols: str,
+    frequency: str,
+    start: str,
+    end: str,
+    initial_cash: float,
+    fee_rate: float,
+    slippage: float,
+    strategy_params_table: Any,
+):
+    strategy_key = DISPLAY_TO_KEY[strategy_label]
+    try:
+        strategy_params = _parameter_table_to_dict(strategy_key, strategy_params_table)
+    except Exception as exc:
+        empty = pd.DataFrame()
+        logs_df = pd.DataFrame({"日志": [friendly_error("参数解析失败", exc)]})
+        message = friendly_error("参数解析失败，请检查弹窗里的参数值。", exc)
+        return gr.update(visible=True), message, None, None, None, empty, empty, empty, empty, logs_df, _pretty_json({})
+
+    summary, dashboard_plot, price_plot, equity_plot, stats_df, trades_df, daily_df, debug_df, logs_df = run_gradio_backtest(
+        strategy_label=strategy_label,
+        symbol=symbol,
+        rotation_symbols=rotation_symbols,
+        frequency=frequency,
+        start=start,
+        end=end,
+        initial_cash=initial_cash,
+        fee_rate=fee_rate,
+        slippage=slippage,
+        strategy_params_json=_pretty_json(strategy_params),
+    )
+    return (
+        gr.update(visible=False),
+        summary,
+        dashboard_plot,
+        price_plot,
+        equity_plot,
+        stats_df,
+        trades_df,
+        daily_df,
+        debug_df,
+        logs_df,
+        _pretty_json(strategy_params),
+    )
+
+
 def run_gradio_optimization(
     strategy_label: str,
     symbol: str,
@@ -254,6 +423,8 @@ def build_app() -> gr.Blocks:
     default_source_file, default_source_code = get_strategy_source(default_strategy_key)
 
     with gr.Blocks(title="Quant Backtester") as demo:
+        if APP_CSS:
+            gr.HTML(f"<style>{APP_CSS}</style>")
         gr.Markdown(
             "# Quant Backtester\n\n"
             "按 vn.py 的 CTA 回测方式重建：策略注册、数据获取、回测、参数优化、策略管理都在一个工作台里。"
@@ -300,6 +471,8 @@ def build_app() -> gr.Blocks:
                     run_btn = gr.Button("开始回测", variant="primary")
                     optimize_btn = gr.Button("参数优化")
 
+                gr.Markdown("点击“开始回测”后会先弹出参数确认窗口，可直接修改参数并查看中文解释。")
+
             with gr.Column(scale=8):
                 summary = gr.Markdown("### 回测总览\n- 尚未运行")
                 dashboard_plot = gr.Plot(label="业绩图表")
@@ -333,6 +506,27 @@ def build_app() -> gr.Blocks:
                         strategy_source_file = gr.Textbox(label="源码文件", value=default_source_file, interactive=False)
                         strategy_source_code = gr.Code(label="策略源码预览", value=default_source_code, language="python", interactive=False)
 
+        with gr.Group(visible=False) as parameter_modal:
+            gr.Markdown("### 策略参数确认\n这里只修改策略参数。交易代码、周期、时间、资金等继续使用主界面的值。")
+            modal_strategy_params_table = gr.Dataframe(
+                label="策略参数表单（编辑“当前值”列）",
+                value=_strategy_parameter_editor_table(default_strategy_key, _pretty_json(default_strategy.default_parameters)),
+                headers=PARAMETER_TABLE_COLUMNS,
+                datatype=["str", "str", "str", "str"],
+                row_count=(1, "dynamic"),
+                column_count=(4, "fixed"),
+                interactive=True,
+                wrap=True,
+                max_height=320,
+                show_row_numbers=True,
+            )
+            gr.Markdown(
+                "说明：`参数名`、`类型`、`中文解释`为参考信息，请只改 `当前值`。布尔值用 `true/false`。"
+            )
+            with gr.Row():
+                confirm_run_btn = gr.Button("确认并开始回测", variant="primary")
+                cancel_run_btn = gr.Button("取消")
+
         frequency.change(
             fn=update_frequency_inputs,
             inputs=[frequency],
@@ -354,10 +548,29 @@ def build_app() -> gr.Blocks:
                 strategy_param_table,
                 strategy_source_file,
                 strategy_source_code,
+                modal_strategy_params_table,
             ],
         )
         run_btn.click(
-            fn=run_gradio_backtest,
+            fn=open_parameter_modal,
+            inputs=[
+                strategy_label,
+                strategy_params_json,
+            ],
+            outputs=[
+                parameter_modal,
+                modal_strategy_params_table,
+            ],
+            queue=False,
+        )
+        cancel_run_btn.click(
+            fn=close_parameter_modal,
+            inputs=None,
+            outputs=[parameter_modal],
+            queue=False,
+        )
+        confirm_run_btn.click(
+            fn=run_gradio_backtest_from_modal,
             inputs=[
                 strategy_label,
                 symbol,
@@ -368,9 +581,10 @@ def build_app() -> gr.Blocks:
                 initial_cash,
                 fee_rate,
                 slippage,
-                strategy_params_json,
+                modal_strategy_params_table,
             ],
             outputs=[
+                parameter_modal,
                 summary,
                 dashboard_plot,
                 price_image,
@@ -380,6 +594,7 @@ def build_app() -> gr.Blocks:
                 daily_table,
                 debug_table,
                 logs_table,
+                strategy_params_json,
             ],
         )
         optimize_btn.click(

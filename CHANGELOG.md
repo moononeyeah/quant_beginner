@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.2.0 - Performance, Optimization & Portfolio Backtesting
+
+### Added
+
+- **Complete performance analytics** (`src/performance.py`):
+  - Sharpe ratio, Sortino ratio, Calmar ratio, return/drawdown ratio
+  - Trade-level metrics: win rate, profit/loss ratio, avg profit/loss, max profit/loss
+  - Time-based metrics: day/week/month win rates
+  - Distribution metrics: skewness, kurtosis, VaR(95%), CVaR(95%)
+  - Fixed max drawdown duration calculation bug
+- **Multi-process parameter optimizer** (`src/optimizer.py`):
+  - Parallel grid search with `multiprocessing`
+  - Progress callback support
+  - Automatic fallback to single-process mode
+  - Configurable max workers
+- **Portfolio backtesting engine** (`src/portfolio_engine.py`):
+  - Multi-symbol simultaneous backtesting with single strategy
+  - Equal-weight or custom weight allocation
+  - Combined portfolio-level equity curve and statistics
+  - Per-symbol result breakdown
+- **CLI enhancements** (`main.py`):
+  - `--portfolio` / `--portfolio-symbols` for portfolio backtesting
+  - `--no-parallel` / `--max-workers` for optimization control
+  - Extended output: Sortino, Calmar, profit/loss ratio, day/month win rates
+
+### Changed
+
+- `src/backtest.py`: `calculate_statistics()` now delegates to `performance.calculate_performance()` for richer metrics
+
 ## v0.1.0 - Initial open source release
 
 ### Added

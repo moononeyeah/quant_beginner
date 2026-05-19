@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
+from src.performance import calculate_performance
 from src.strategy_base import DailyResult, MarketBar, OrderRecord, StopOrderRecord, TradeRecord
 from src.strategies import STRATEGY_SPECS, get_strategy_spec
 
@@ -332,56 +333,27 @@ class CtaBacktestingEngine:
     def calculate_statistics(self, daily_df: pd.DataFrame) -> dict[str, Any]:
         if daily_df.empty:
             return {}
-        df = daily_df.copy()
-        df["balance"] = df["net_pnl"].cumsum() + self.capital
-        df["return"] = df["balance"].pct_change().fillna(0.0)
-        df["highlevel"] = df["balance"].cummax()
-        df["drawdown"] = df["balance"] - df["highlevel"]
-        df["ddpercent"] = df["balance"] / df["highlevel"] - 1
 
-        total_days = len(df)
-        end_balance = float(df["balance"].iloc[-1])
-        total_return = end_balance / self.capital - 1
-        return_std = float(df["return"].std(ddof=0))
-        sharpe_ratio = (float(df["return"].mean()) / return_std * sqrt(240)) if return_std > 0 else 0.0
-        trade_returns = []
-        position_stack: list[TradeRecord] = []
-        for trade in self.trades.values():
-            if trade.direction == "long":
-                position_stack.append(trade)
-            else:
-                for entry in list(position_stack):
-                    trade_returns.append((trade.price - entry.price) / entry.price if entry.price else 0.0)
-                    position_stack.remove(entry)
-                    break
+        trades_df = pd.DataFrame([trade.__dict__ for trade in self.trades.values()])
+        metrics = calculate_performance(
+            daily_df=daily_df,
+            trades_df=trades_df if not trades_df.empty else None,
+            capital=self.capital,
+        )
 
-        return {
-            "start_date": str(pd.Timestamp(df["date"].iloc[0]).date()),
-            "end_date": str(pd.Timestamp(df["date"].iloc[-1]).date()),
-            "total_days": int(total_days),
-            "profit_days": int((df["net_pnl"] > 0).sum()),
-            "loss_days": int((df["net_pnl"] < 0).sum()),
-            "capital": float(self.capital),
-            "end_balance": end_balance,
-            "max_drawdown": float(df["drawdown"].min()),
-            "max_ddpercent": float(df["ddpercent"].min()),
-            "max_drawdown_duration": int((pd.Timestamp(df["date"].iloc[df["drawdown"].idxmin()]) - pd.Timestamp(df["date"].iloc[df["balance"].idxmax()])).days),
-            "total_net_pnl": float(df["net_pnl"].sum()),
-            "daily_net_pnl": float(df["net_pnl"].mean()),
-            "total_commission": float(df["commission"].sum()),
-            "daily_commission": float(df["commission"].mean()),
-            "total_turnover": float(df["turnover"].sum()),
-            "daily_turnover": float(df["turnover"].mean()),
-            "total_trade_count": int(df["trade_count"].sum()),
-            "daily_trade_count": float(df["trade_count"].mean()),
-            "total_return": float(total_return),
-            "annual_return": float(total_return * (240 / total_days)) if total_days else 0.0,
-            "daily_return": float(df["return"].mean()),
-            "return_std": return_std,
-            "sharpe_ratio": sharpe_ratio,
-            "return_drawdown_ratio": abs(float(total_return / df["ddpercent"].min())) if float(df["ddpercent"].min()) < 0 else 0.0,
-            "win_rate": float((pd.Series(trade_returns) > 0).mean()) if trade_returns else 0.0,
-        }
+        stats = metrics.to_dict()
+        # 补充与原接口兼容的字段
+        stats["start_date"] = str(pd.Timestamp(daily_df["date"].iloc[0]).date())
+        stats["end_date"] = str(pd.Timestamp(daily_df["date"].iloc[-1]).date())
+        stats["capital"] = float(self.capital)
+        stats["end_balance"] = float(stats.get("total_return", 0.0)) * self.capital + self.capital
+        stats["total_commission"] = float(daily_df["commission"].sum())
+        stats["daily_commission"] = float(daily_df["commission"].mean())
+        stats["total_turnover"] = float(daily_df["turnover"].sum())
+        stats["daily_turnover"] = float(daily_df["turnover"].mean())
+        stats["total_trade_count"] = int(daily_df["trade_count"].sum())
+        stats["daily_trade_count"] = float(daily_df["trade_count"].mean())
+        return stats
 
     def build_result(self) -> BacktestResult:
         daily_df = self.calculate_result()

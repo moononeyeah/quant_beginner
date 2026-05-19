@@ -7,8 +7,10 @@ from typing import Any
 import pandas as pd
 
 from config import DEFAULT_FEE_RATE, DEFAULT_INITIAL_CASH, DEFAULT_ROTATION_SYMBOLS
-from src.backtest import optimize_strategy, run_strategy_backtest
+from src.backtest import run_strategy_backtest
 from src.data_fetcher import fetch_daily_data
+from src.optimizer import optimize_strategy
+from src.portfolio_engine import run_portfolio_backtest
 from src.plotter import plot_equity_curve, plot_price_with_signals, plot_rotation_selection
 from src.rotation_strategy import fetch_rotation_data, parse_rotation_symbols
 from src.strategies import STRATEGY_SPECS, get_strategy_spec
@@ -142,6 +144,8 @@ def run_optimization_pipeline(
     rotation_symbols: str | list[str] | None,
     strategy_params: dict[str, Any],
     optimization_grid: dict[str, list[Any]],
+    use_parallel: bool = True,
+    max_workers: int | None = None,
 ) -> pd.DataFrame:
     price_data, _ = _load_price_data(
         strategy_name=strategy_name,
@@ -159,7 +163,37 @@ def run_optimization_pipeline(
         initial_cash=initial_cash,
         fee_rate=fee_rate,
         slippage=slippage,
+        use_parallel=use_parallel,
+        max_workers=max_workers,
     )
+
+
+def run_portfolio_pipeline(
+    symbols: list[str],
+    start: str,
+    end: str,
+    initial_cash: float,
+    fee_rate: float,
+    slippage: float,
+    strategy_name: str = "double_ma",
+    weights: dict[str, float] | None = None,
+    strategy_params: dict[str, Any] | None = None,
+):
+    """运行组合回测流水线。"""
+    from src.rotation_strategy import fetch_rotation_data
+
+    price_data = fetch_rotation_data(symbols=symbols, start_date=start, end_date=end)
+    result = run_portfolio_backtest(
+        data=price_data,
+        strategy_name=strategy_name,
+        symbols=symbols,
+        weights=weights,
+        strategy_setting=strategy_params,
+        initial_cash=initial_cash,
+        fee_rate=fee_rate,
+        slippage=slippage,
+    )
+    return price_data, result, symbols
 
 
 def _parse_json_dict(raw: str | None, field_name: str) -> dict[str, Any]:
@@ -187,6 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slippage", type=float, default=0.0, help="滑点")
     parser.add_argument("--params", default="{}", help="策略参数 JSON")
     parser.add_argument("--optimize", default="", help="优化参数网格 JSON")
+    parser.add_argument("--portfolio", action="store_true", help="启用组合回测模式（对多个标的同时回测）")
+    parser.add_argument("--portfolio-symbols", default="", help="组合回测标的列表，逗号分隔")
+    parser.add_argument("--no-parallel", action="store_true", help="参数优化时禁用多进程")
+    parser.add_argument("--max-workers", type=int, default=None, help="参数优化最大并行进程数")
     return parser
 
 
@@ -195,6 +233,41 @@ def main() -> None:
     try:
         strategy_params = _parse_json_dict(args.params, "策略参数")
         optimization_grid = _parse_json_dict(args.optimize, "优化参数") if args.optimize else {}
+
+        # 组合回测模式
+        if args.portfolio or args.portfolio_symbols:
+            from src.rotation_strategy import parse_rotation_symbols
+            portfolio_symbols = parse_rotation_symbols(args.portfolio_symbols or args.symbol)
+            _, result, symbols = run_portfolio_pipeline(
+                symbols=portfolio_symbols,
+                start=args.start,
+                end=args.end,
+                initial_cash=args.cash,
+                fee_rate=args.fee,
+                slippage=args.slippage,
+                strategy_name=args.strategy,
+                strategy_params=strategy_params,
+            )
+            print("组合回测完成")
+            print(f"策略类型：{args.strategy}")
+            print(f"标的池：{symbols}")
+            print(f"标的数量：{len(symbols)}")
+            print(f"初始资金：{result.initial_cash:.2f}")
+            print(f"最终资金：{result.final_cash:.2f}")
+            print(f"总收益率：{format_percent(result.total_return)}")
+            print(f"最大回撤：{format_percent(result.max_drawdown)}")
+            print(f"交易次数：{result.trade_count}")
+            print(f"胜率：{format_percent(result.win_rate)}")
+            print(f"总交易日：{result.statistics.get('total_days', 0)}")
+            print(f"Sharpe：{result.statistics.get('sharpe_ratio', 0.0):.2f}")
+            print(f"Sortino：{result.statistics.get('sortino_ratio', 0.0):.2f}")
+            print(f"Calmar：{result.statistics.get('calmar_ratio', 0.0):.2f}")
+            print(f"年化收益：{format_percent(result.statistics.get('annual_return', 0.0))}")
+            print(f"盈亏比：{result.statistics.get('profit_loss_ratio', 0.0):.2f}")
+            print(f"日胜率：{format_percent(result.statistics.get('day_win_rate', 0.0))}")
+            print(f"月胜率：{format_percent(result.statistics.get('month_win_rate', 0.0))}")
+            return
+
         if optimization_grid:
             result_df = run_optimization_pipeline(
                 symbol=args.symbol,
@@ -208,6 +281,8 @@ def main() -> None:
                 rotation_symbols=args.rotation_symbols,
                 strategy_params=strategy_params,
                 optimization_grid=optimization_grid,
+                use_parallel=not args.no_parallel,
+                max_workers=args.max_workers,
             )
             print(result_df.head(20).to_string(index=False))
             return
@@ -236,7 +311,10 @@ def main() -> None:
         print(f"胜率：{format_percent(result.win_rate)}")
         print(f"总交易日：{result.statistics.get('total_days', 0)}")
         print(f"Sharpe：{result.statistics.get('sharpe_ratio', 0.0):.2f}")
+        print(f"Sortino：{result.statistics.get('sortino_ratio', 0.0):.2f}")
+        print(f"Calmar：{result.statistics.get('calmar_ratio', 0.0):.2f}")
         print(f"年化收益：{format_percent(result.statistics.get('annual_return', 0.0))}")
+        print(f"盈亏比：{result.statistics.get('profit_loss_ratio', 0.0):.2f}")
         print(f"K线指标图：{price_plot}")
         print(f"资金曲线图：{equity_plot}")
     except Exception as exc:

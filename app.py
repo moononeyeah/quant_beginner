@@ -16,7 +16,7 @@ from config import (
     default_intraday_end,
     default_intraday_start,
 )
-from main import run_optimization_pipeline, run_pipeline
+from main import run_optimization_pipeline, run_pipeline, run_portfolio_pipeline
 from src.plotter import plot_performance_dashboard
 from src.strategies import (
     PARAMETER_DESCRIPTIONS,
@@ -104,6 +104,11 @@ def _summary_markdown(result, strategy_key: str, frequency: str, symbol_label: s
         f"- 年化收益：{format_percent(result.statistics.get('annual_return', 0.0))}",
         f"- 最大回撤：{format_percent(result.max_drawdown)}",
         f"- Sharpe：{result.statistics.get('sharpe_ratio', 0.0):.2f}",
+        f"- Sortino：{result.statistics.get('sortino_ratio', 0.0):.2f}",
+        f"- Calmar：{result.statistics.get('calmar_ratio', 0.0):.2f}",
+        f"- 盈亏比：{result.statistics.get('profit_loss_ratio', 0.0):.2f}",
+        f"- 日胜率：{format_percent(result.statistics.get('day_win_rate', 0.0))}",
+        f"- 月胜率：{format_percent(result.statistics.get('month_win_rate', 0.0))}",
         f"- 总交易日：{result.statistics.get('total_days', 0)}",
         f"- 交易次数：{result.trade_count}",
         f"- 胜率：{format_percent(result.win_rate)}",
@@ -114,7 +119,28 @@ def _summary_markdown(result, strategy_key: str, frequency: str, symbol_label: s
 def _statistics_table(statistics: dict[str, Any]) -> pd.DataFrame:
     if not statistics:
         return pd.DataFrame(columns=["指标", "数值"])
-    rows = [(key, value) for key, value in statistics.items()]
+    # 优先展示重要指标
+    priority_keys = [
+        "total_return", "annual_return", "max_drawdown", "max_ddpercent",
+        "sharpe_ratio", "sortino_ratio", "calmar_ratio", "return_drawdown_ratio",
+        "win_rate", "profit_loss_ratio", "day_win_rate", "month_win_rate",
+        "total_days", "profit_days", "loss_days",
+        "total_trade_count", "max_drawdown_duration",
+        "annual_volatility", "daily_volatility",
+        "skewness", "kurtosis", "var_95", "cvar_95",
+        "capital", "end_balance", "total_net_pnl",
+        "total_commission", "total_turnover",
+    ]
+    seen = set()
+    rows: list[tuple[str, Any]] = []
+    for key in priority_keys:
+        if key in statistics and key not in seen:
+            rows.append((key, statistics[key]))
+            seen.add(key)
+    for key, value in statistics.items():
+        if key not in seen:
+            rows.append((key, value))
+            seen.add(key)
     return pd.DataFrame(rows, columns=["指标", "数值"])
 
 
@@ -417,6 +443,98 @@ def run_gradio_optimization(
         return pd.DataFrame({"错误": [friendly_error("参数优化失败", exc)]})
 
 
+def run_gradio_portfolio(
+    portfolio_strategy_label: str,
+    portfolio_symbols: str,
+    portfolio_weights_json: str,
+    portfolio_start: str,
+    portfolio_end: str,
+    portfolio_cash: float,
+    portfolio_fee: float,
+    portfolio_slippage: float,
+    portfolio_params_json: str,
+):
+    try:
+        strategy_key = DISPLAY_TO_KEY[portfolio_strategy_label]
+        strategy_params = _parse_json_dict(portfolio_params_json, "策略参数")
+        weights = _parse_json_dict(portfolio_weights_json, "权重") if portfolio_weights_json.strip() else {}
+
+        from src.rotation_strategy import parse_rotation_symbols
+        symbols = parse_rotation_symbols(portfolio_symbols)
+
+        _, result, symbols = run_portfolio_pipeline(
+            symbols=symbols,
+            start=portfolio_start,
+            end=portfolio_end,
+            initial_cash=float(portfolio_cash),
+            fee_rate=float(portfolio_fee),
+            slippage=float(portfolio_slippage),
+            strategy_name=strategy_key,
+            weights=weights if weights else None,
+            strategy_params=strategy_params,
+        )
+
+        spec = get_strategy_spec(strategy_key)
+        summary_lines = [
+            "### 组合回测总览",
+            f"- 策略：{spec.display_name}",
+            f"- 标的池：{symbols}",
+            f"- 标的数量：{len(symbols)}",
+            f"- 初始资金：{result.initial_cash:,.2f}",
+            f"- 最终资金：{result.final_cash:,.2f}",
+            f"- 总收益率：{format_percent(result.total_return)}",
+            f"- 年化收益：{format_percent(result.statistics.get('annual_return', 0.0))}",
+            f"- 最大回撤：{format_percent(result.max_drawdown)}",
+            f"- Sharpe：{result.statistics.get('sharpe_ratio', 0.0):.2f}",
+            f"- Sortino：{result.statistics.get('sortino_ratio', 0.0):.2f}",
+            f"- Calmar：{result.statistics.get('calmar_ratio', 0.0):.2f}",
+            f"- 盈亏比：{result.statistics.get('profit_loss_ratio', 0.0):.2f}",
+            f"- 日胜率：{format_percent(result.statistics.get('day_win_rate', 0.0))}",
+            f"- 月胜率：{format_percent(result.statistics.get('month_win_rate', 0.0))}",
+            f"- 交易次数：{result.trade_count}",
+            f"- 总交易日：{result.statistics.get('total_days', 0)}",
+        ]
+        summary = "\n".join(summary_lines)
+        stats_df = _statistics_table(result.statistics)
+        trades_df = _clean_table(result.trades)
+        daily_df = _clean_table(result.daily_results)
+        equity_plot = None
+        if not result.equity_curve.empty and "equity" in result.equity_curve.columns:
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(12, 5))
+            ax.plot(result.equity_curve["date"], result.equity_curve["equity"], label="组合资金曲线", color="#1f77b4")
+            ax.set_title("组合回测资金曲线")
+            ax.set_xlabel("日期")
+            ax.set_ylabel("资金")
+            ax.grid(alpha=0.25)
+            ax.legend()
+            fig.autofmt_xdate()
+            fig.tight_layout()
+            equity_plot = fig
+
+        # 各子账户汇总
+        per_symbol_rows: list[dict[str, Any]] = []
+        for sym, r in result.per_symbol_results.items():
+            per_symbol_rows.append({
+                "标的": sym,
+                "总收益率": f"{r.total_return:.2%}",
+                "最终资金": f"{r.final_cash:.2f}",
+                "最大回撤": f"{r.max_drawdown:.2%}",
+                "交易次数": r.trade_count,
+                "胜率": f"{r.win_rate:.2%}",
+                "Sharpe": f"{r.statistics.get('sharpe_ratio', 0):.2f}",
+            })
+        per_symbol_df = pd.DataFrame(per_symbol_rows)
+        logs_df = pd.DataFrame({"日志": result.logs}) if result.logs else pd.DataFrame(columns=["日志"])
+
+        return summary, equity_plot, stats_df, trades_df, daily_df, per_symbol_df, logs_df
+    except Exception as exc:
+        empty = pd.DataFrame()
+        logs_df = pd.DataFrame({"日志": [friendly_error("组合回测失败", exc)]})
+        message = friendly_error("组合回测失败，请检查代码、时间格式、依赖安装和网络连接。", exc)
+        return message, None, empty, empty, empty, empty, logs_df
+
+
 def build_app() -> gr.Blocks:
     default_strategy_key = "double_ma"
     default_strategy = get_strategy_spec(default_strategy_key)
@@ -505,6 +623,52 @@ def build_app() -> gr.Blocks:
                         )
                         strategy_source_file = gr.Textbox(label="源码文件", value=default_source_file, interactive=False)
                         strategy_source_code = gr.Code(label="策略源码预览", value=default_source_code, language="python", interactive=False)
+                    with gr.Tab("组合回测"):
+                        gr.Markdown("### 多标组合回测\n在多个标的上同时运行同一策略，资金等权分配。")
+                        with gr.Row():
+                            with gr.Column(scale=4, min_width=300):
+                                portfolio_strategy_label = gr.Dropdown(
+                                    label="组合策略",
+                                    choices=[spec.display_name for spec in STRATEGY_SPECS.values() if spec.engine_type == "cta"],
+                                    value=get_strategy_spec("double_ma").display_name,
+                                )
+                                portfolio_symbols = gr.Textbox(
+                                    label="标的池（逗号分隔）",
+                                    value=",".join(DEFAULT_ROTATION_SYMBOLS),
+                                    placeholder="例如 510300,159915,512100",
+                                )
+                                portfolio_weights_json = gr.Code(
+                                    label="权重 JSON（留空则等权）",
+                                    value="{}",
+                                    language="json",
+                                    lines=6,
+                                )
+                                portfolio_start = gr.Textbox(label="开始时间", value="20230101")
+                                portfolio_end = gr.Textbox(label="结束时间", value=default_end_date())
+                                portfolio_cash = gr.Number(label="总资金", value=DEFAULT_INITIAL_CASH, precision=2)
+                                portfolio_fee = gr.Number(label="手续费率", value=DEFAULT_FEE_RATE, precision=6)
+                                portfolio_slippage = gr.Number(label="滑点", value=DEFAULT_SLIPPAGE, precision=6)
+                                portfolio_params_json = gr.Code(
+                                    label="策略参数 JSON",
+                                    value=_pretty_json(default_strategy.default_parameters),
+                                    language="json",
+                                    lines=10,
+                                )
+                                portfolio_run_btn = gr.Button("运行组合回测", variant="primary")
+                            with gr.Column(scale=8):
+                                portfolio_summary = gr.Markdown("### 组合回测总览\n- 尚未运行")
+                                portfolio_equity_plot = gr.Plot(label="组合资金曲线")
+                                with gr.Tabs():
+                                    with gr.Tab("统计指标"):
+                                        portfolio_stats_table = gr.Dataframe(label="统计指标", interactive=False, wrap=True)
+                                    with gr.Tab("成交记录"):
+                                        portfolio_trades_table = gr.Dataframe(label="成交记录", interactive=False, wrap=True)
+                                    with gr.Tab("每日盈亏"):
+                                        portfolio_daily_table = gr.Dataframe(label="每日盈亏", interactive=False, wrap=True)
+                                    with gr.Tab("子账户汇总"):
+                                        portfolio_per_symbol_table = gr.Dataframe(label="子账户汇总", interactive=False, wrap=True)
+                                    with gr.Tab("运行日志"):
+                                        portfolio_logs_table = gr.Dataframe(label="日志", interactive=False, wrap=True)
 
         with gr.Group(visible=False) as parameter_modal:
             gr.Markdown("### 策略参数确认\n这里只修改策略参数。交易代码、周期、时间、资金等继续使用主界面的值。")
@@ -613,6 +777,29 @@ def build_app() -> gr.Blocks:
                 optimization_grid_json,
             ],
             outputs=[optimization_table],
+        )
+        portfolio_run_btn.click(
+            fn=run_gradio_portfolio,
+            inputs=[
+                portfolio_strategy_label,
+                portfolio_symbols,
+                portfolio_weights_json,
+                portfolio_start,
+                portfolio_end,
+                portfolio_cash,
+                portfolio_fee,
+                portfolio_slippage,
+                portfolio_params_json,
+            ],
+            outputs=[
+                portfolio_summary,
+                portfolio_equity_plot,
+                portfolio_stats_table,
+                portfolio_trades_table,
+                portfolio_daily_table,
+                portfolio_per_symbol_table,
+                portfolio_logs_table,
+            ],
         )
 
     return demo

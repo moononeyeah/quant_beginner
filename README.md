@@ -98,6 +98,16 @@ python main.py --strategy double_ma --symbol 510300 --frequency daily --start 20
 
 ## Streamlit 可视化启动
 
+### 一键启动（推荐）
+
+```bash
+./start.sh
+```
+
+脚本会自动查找可用端口、启动服务并输出访问地址。
+
+### 手动启动
+
 ```bash
 streamlit run app.py
 ```

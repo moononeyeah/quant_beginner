@@ -8,7 +8,7 @@ import streamlit as st
 
 from config import DEFAULT_FEE_RATE, DEFAULT_INITIAL_CASH, DEFAULT_SLIPPAGE, default_end_date
 from src.data_fetcher import fetch_daily_data
-from src.optimizer import optimize_strategy_parallel
+from src.optimizer import optimize_strategy
 from src.strategies import STRATEGY_SPECS, get_strategy_spec
 from src.utils import format_percent
 
@@ -143,7 +143,7 @@ if run_btn:
             # 先获取数据
             data = fetch_daily_data(symbol=symbol, start_date=start, end_date=end, frequency=frequency)
 
-            result = optimize_strategy_parallel(
+            result = optimize_strategy(
                 data=data,
                 strategy_name=strategy_key,
                 base_setting=base_params,
@@ -151,6 +151,7 @@ if run_btn:
                 initial_cash=initial_cash,
                 fee_rate=fee_rate,
                 slippage=slippage,
+                use_parallel=use_parallel,
                 max_workers=max_workers if max_workers > 0 else None,
                 progress_callback=on_progress,
             )
@@ -163,8 +164,7 @@ if run_btn:
 
 # 展示结果
 if "last_opt_result" in st.session_state:
-    result = st.session_state["last_opt_result"]
-    df = result.results_df
+    df = st.session_state["last_opt_result"]
 
     st.markdown("---")
     st.subheader("📊 优化结果")

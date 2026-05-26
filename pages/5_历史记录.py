@@ -145,34 +145,36 @@ if result:
     save_notes = st.text_area("备注", value="", key="save_notes")
     if st.button("💾 保存到历史记录", type="primary"):
         if save_type == "单标回测":
+            ctx = st.session_state.get("last_single_context", {})
             save_record(
                 name=save_name,
                 backtest_type="single",
                 strategy_key=st.session_state["last_single_strategy"],
                 symbols=st.session_state["last_single_symbol"],
-                start_date="",
-                end_date="",
-                frequency="",
-                initial_cash=result.initial_cash,
-                fee_rate=0.0003,
-                slippage=0.0,
-                strategy_params={},
+                start_date=str(ctx.get("start_date", "")),
+                end_date=str(ctx.get("end_date", "")),
+                frequency=str(ctx.get("frequency", "")),
+                initial_cash=float(ctx.get("initial_cash", result.initial_cash)),
+                fee_rate=float(ctx.get("fee_rate", 0.0003)),
+                slippage=float(ctx.get("slippage", 0.0)),
+                strategy_params=dict(ctx.get("strategy_params", {})),
                 statistics=result.statistics,
                 notes=save_notes,
             )
         else:
+            ctx = st.session_state.get("last_portfolio_context", {})
             save_record(
                 name=save_name,
                 backtest_type="portfolio",
                 strategy_key=st.session_state["last_portfolio_strategy"],
                 symbols=",".join(st.session_state["last_portfolio_symbols"]),
-                start_date="",
-                end_date="",
-                frequency="",
-                initial_cash=result.initial_cash,
-                fee_rate=0.0003,
-                slippage=0.0,
-                strategy_params={},
+                start_date=str(ctx.get("start_date", "")),
+                end_date=str(ctx.get("end_date", "")),
+                frequency=str(ctx.get("frequency", "")),
+                initial_cash=float(ctx.get("initial_cash", result.initial_cash)),
+                fee_rate=float(ctx.get("fee_rate", 0.0003)),
+                slippage=float(ctx.get("slippage", 0.0)),
+                strategy_params=dict(ctx.get("strategy_params", {})),
                 statistics=result.statistics,
                 notes=save_notes,
             )
@@ -193,6 +195,7 @@ else:
     # 展示关键列
     display_cols = [
         "id", "created_at", "name", "backtest_type", "strategy_key", "symbols",
+        "start_date", "end_date", "frequency",
         "total_return", "max_drawdown", "sharpe_ratio", "sortino_ratio",
         "calmar_ratio", "annual_return", "win_rate", "trade_count", "notes",
     ]

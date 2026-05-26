@@ -8,7 +8,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from src.backtest import run_strategy_backtest
-from src.strategies import get_strategy_spec
+from src.strategies import get_strategy_spec, validate_strategy_parameters
 
 
 @dataclass
@@ -50,6 +50,7 @@ def _run_single_task(task: OptimizationTask) -> dict[str, Any]:
     setting = dict(task.base_setting)
     setting.update(dict(zip(task.param_keys, task.param_values)))
     try:
+        validate_strategy_parameters(task.strategy_name, setting)
         result = run_strategy_backtest(
             data=task.data,
             strategy_name=task.strategy_name,
@@ -106,6 +107,7 @@ def optimize_strategy_parallel(
     """
     if not optimization_grid:
         raise ValueError("参数优化网格为空")
+    validate_strategy_parameters(strategy_name, base_setting)
 
     spec = get_strategy_spec(strategy_name)
     valid_params = set(spec.default_parameters.keys())

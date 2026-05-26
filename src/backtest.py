@@ -10,7 +10,7 @@ import pandas as pd
 
 from src.performance import calculate_performance
 from src.strategy_base import DailyResult, MarketBar, OrderRecord, StopOrderRecord, TradeRecord
-from src.strategies import STRATEGY_SPECS, get_strategy_spec
+from src.strategies import STRATEGY_SPECS, get_strategy_spec, validate_strategy_parameters
 
 
 @dataclass
@@ -573,6 +573,7 @@ def run_strategy_backtest(
     size: float = 1.0,
     pricetick: float = 0.01,
 ) -> BacktestResult:
+    validate_strategy_parameters(strategy_name, strategy_setting)
     spec = get_strategy_spec(strategy_name)
     if spec.engine_type == "portfolio":
         return run_portfolio_rotation_backtest(

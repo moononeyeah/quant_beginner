@@ -244,3 +244,42 @@ def list_strategy_catalog() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def validate_strategy_parameters(strategy_key: str, params: dict[str, Any] | None) -> None:
+    """校验策略参数，尽早阻断明显无效的配置。"""
+    params = params or {}
+    spec = get_strategy_spec(strategy_key)
+    default_params = spec.default_parameters
+
+    # 仅校验策略定义中声明的参数，避免外部扩展字段误报。
+    invalid_numeric: list[str] = []
+    for name, default_value in default_params.items():
+        if not isinstance(default_value, (int, float)) or isinstance(default_value, bool):
+            continue
+        if name not in params:
+            continue
+        try:
+            value = float(params[name])
+        except Exception as exc:
+            raise ValueError(f"参数 `{name}` 必须是数字，当前值：{params[name]}") from exc
+        if value <= 0:
+            invalid_numeric.append(name)
+    if invalid_numeric:
+        raise ValueError(f"以下参数必须大于 0：{invalid_numeric}")
+
+    def _v(name: str, fallback: Any) -> Any:
+        return params.get(name, fallback)
+
+    # 常见窗口逻辑校验
+    if "fast_window" in default_params and "slow_window" in default_params:
+        fast_window = int(_v("fast_window", default_params["fast_window"]))
+        slow_window = int(_v("slow_window", default_params["slow_window"]))
+        if fast_window >= slow_window:
+            raise ValueError("参数不合法：`fast_window` 必须小于 `slow_window`")
+
+    if strategy_key == "turtle_signal":
+        entry_window = int(_v("entry_window", default_params.get("entry_window", 20)))
+        exit_window = int(_v("exit_window", default_params.get("exit_window", 10)))
+        if entry_window <= exit_window:
+            raise ValueError("参数不合法：`entry_window` 必须大于 `exit_window`")

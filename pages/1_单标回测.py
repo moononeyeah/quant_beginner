@@ -93,6 +93,15 @@ if run_btn:
     st.session_state["last_single_result"] = result
     st.session_state["last_single_symbol"] = symbol_label
     st.session_state["last_single_strategy"] = strategy_key
+    st.session_state["last_single_context"] = {
+        "start_date": start,
+        "end_date": end,
+        "frequency": frequency,
+        "initial_cash": float(initial_cash),
+        "fee_rate": float(fee_rate),
+        "slippage": float(slippage),
+        "strategy_params": edited_params,
+    }
 
     st.success("回测完成！")
 

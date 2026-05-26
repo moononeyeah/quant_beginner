@@ -202,6 +202,18 @@ python examples/demo.py
 
 示例脚本默认回测 `510300`。
 
+批量更新测试缓存数据（含更多标的）：
+
+```bash
+python examples/update_test_data.py
+```
+
+如需附带分钟线样本：
+
+```bash
+python examples/update_test_data.py --with-minute --minute-period 5 --minute-days 5
+```
+
 ## 版本历史
 
 参见 [CHANGELOG.md](./CHANGELOG.md)

@@ -104,6 +104,15 @@ if run_btn:
     st.session_state["last_portfolio_result"] = result
     st.session_state["last_portfolio_symbols"] = actual_symbols
     st.session_state["last_portfolio_strategy"] = strategy_key
+    st.session_state["last_portfolio_context"] = {
+        "start_date": start,
+        "end_date": end,
+        "frequency": "daily",
+        "initial_cash": float(initial_cash),
+        "fee_rate": float(fee_rate),
+        "slippage": float(slippage),
+        "strategy_params": edited_params,
+    }
 
     st.success(f"组合回测完成！标的数：{len(actual_symbols)}")
 

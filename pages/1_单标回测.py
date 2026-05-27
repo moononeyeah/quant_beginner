@@ -116,8 +116,17 @@ if "last_single_result" in st.session_state:
     spec = get_strategy_spec(strategy_key)
 
     # 总览卡片
+    benchmark_total_return = 0.0
+    excess_return = 0.0
+    if not result.daily_results.empty and "close_price" in result.daily_results.columns:
+        base = result.daily_results["close_price"].iloc[0]
+        last = result.daily_results["close_price"].iloc[-1]
+        if base:
+            benchmark_total_return = float(last / base - 1)
+            excess_return = float(result.total_return - benchmark_total_return)
+
     st.markdown("---")
-    cols = st.columns(4)
+    cols = st.columns(5)
     with cols[0]:
         st.metric("总收益率", format_percent(result.total_return))
     with cols[1]:
@@ -126,6 +135,8 @@ if "last_single_result" in st.session_state:
         st.metric("Sharpe", f"{result.statistics.get('sharpe_ratio', 0):.2f}")
     with cols[3]:
         st.metric("交易次数", result.trade_count)
+    with cols[4]:
+        st.metric("超额收益", format_percent(excess_return))
 
     cols2 = st.columns(4)
     with cols2[0]:
@@ -151,6 +162,19 @@ if "last_single_result" in st.session_state:
         with col_right:
             if not result.equity_curve.empty:
                 st.line_chart(result.equity_curve.set_index("date")["equity"], use_container_width=True)
+                if not result.daily_results.empty and "close_price" in result.daily_results.columns:
+                    curve_df = result.daily_results.copy()
+                    curve_df["date"] = pd.to_datetime(curve_df["date"])
+                    base = curve_df["close_price"].iloc[0]
+                    if base:
+                        curve_df["benchmark_equity"] = result.initial_cash * (curve_df["close_price"] / base)
+                        curve_df["strategy_equity"] = curve_df["equity"]
+                        curve_df["excess_equity"] = curve_df["strategy_equity"] - curve_df["benchmark_equity"]
+                        st.caption("策略 vs 基准（Buy&Hold）")
+                        st.line_chart(
+                            curve_df.set_index("date")[["strategy_equity", "benchmark_equity", "excess_equity"]],
+                            use_container_width=True,
+                        )
 
     with tab_stats:
         stats = result.statistics

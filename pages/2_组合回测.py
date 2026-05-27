@@ -125,8 +125,15 @@ if "last_portfolio_result" in st.session_state:
     actual_symbols = st.session_state["last_portfolio_symbols"]
     strategy_key = st.session_state["last_portfolio_strategy"]
 
+    benchmark_total_return = 0.0
+    if result.per_symbol_results:
+        vals = [r.total_return for r in result.per_symbol_results.values()]
+        if vals:
+            benchmark_total_return = float(sum(vals) / len(vals))
+    excess_return = float(result.total_return - benchmark_total_return)
+
     st.markdown("---")
-    cols = st.columns(4)
+    cols = st.columns(5)
     with cols[0]:
         st.metric("总收益率", format_percent(result.total_return))
     with cols[1]:
@@ -135,6 +142,8 @@ if "last_portfolio_result" in st.session_state:
         st.metric("Sharpe", f"{result.statistics.get('sharpe_ratio', 0):.2f}")
     with cols[3]:
         st.metric("交易次数", result.trade_count)
+    with cols[4]:
+        st.metric("超额收益", format_percent(excess_return))
 
     cols2 = st.columns(4)
     with cols2[0]:
@@ -153,6 +162,8 @@ if "last_portfolio_result" in st.session_state:
     with tab_chart:
         if not result.equity_curve.empty:
             st.line_chart(result.equity_curve.set_index("date")["equity"], use_container_width=True)
+            if result.per_symbol_results:
+                st.caption("基准采用子账户收益简单平均（近似 Buy&Hold 参考）")
         else:
             st.info("无资金曲线数据")
 

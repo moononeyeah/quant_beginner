@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+import uuid
 
 import pandas as pd
 import streamlit as st
@@ -42,9 +43,17 @@ def _init_db() -> None:
             trade_count INTEGER,
             total_days INTEGER,
             statistics_json TEXT,
-            notes TEXT
+            notes TEXT,
+            run_type TEXT DEFAULT 'normal',
+            experiment_id TEXT DEFAULT ''
         )
     """)
+    # 兼容旧表结构
+    cols = pd.read_sql_query("PRAGMA table_info(backtest_records)", conn)["name"].tolist()
+    if "run_type" not in cols:
+        conn.execute("ALTER TABLE backtest_records ADD COLUMN run_type TEXT DEFAULT 'normal'")
+    if "experiment_id" not in cols:
+        conn.execute("ALTER TABLE backtest_records ADD COLUMN experiment_id TEXT DEFAULT ''")
     conn.commit()
     conn.close()
 
@@ -63,6 +72,8 @@ def save_record(
     strategy_params: dict[str, Any],
     statistics: dict[str, Any],
     notes: str = "",
+    run_type: str = "normal",
+    experiment_id: str = "",
 ) -> None:
     _init_db()
     conn = sqlite3.connect(str(DB_PATH))
@@ -73,8 +84,8 @@ def save_record(
          frequency, initial_cash, fee_rate, slippage, strategy_params,
          total_return, max_drawdown, sharpe_ratio, sortino_ratio, calmar_ratio,
          annual_return, win_rate, profit_loss_ratio, trade_count, total_days,
-         statistics_json, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         statistics_json, notes, run_type, experiment_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             datetime.now().isoformat(),
@@ -101,6 +112,8 @@ def save_record(
             statistics.get("total_days", 0),
             json.dumps(statistics, ensure_ascii=False),
             notes,
+            run_type,
+            experiment_id,
         ),
     )
     conn.commit()
@@ -154,6 +167,8 @@ else:
 if result:
     save_name = st.text_input("记录名称", value=default_name, key="save_name")
     save_notes = st.text_area("备注", value="", key="save_notes")
+    run_type = st.selectbox("运行类型", ["normal", "optimize", "walk_forward"], index=0)
+    experiment_id = st.text_input("实验ID（可选）", value=uuid.uuid4().hex[:8])
     if st.button("💾 保存到历史记录", type="primary"):
         if save_type == "单标回测":
             ctx = st.session_state.get("last_single_context", {})
@@ -171,6 +186,8 @@ if result:
                 strategy_params=dict(ctx.get("strategy_params", {})),
                 statistics=result.statistics,
                 notes=save_notes,
+                run_type=run_type,
+                experiment_id=experiment_id.strip(),
             )
         else:
             ctx = st.session_state.get("last_portfolio_context", {})
@@ -188,6 +205,8 @@ if result:
                 strategy_params=dict(ctx.get("strategy_params", {})),
                 statistics=result.statistics,
                 notes=save_notes,
+                run_type=run_type,
+                experiment_id=experiment_id.strip(),
             )
         st.success("保存成功！")
         st.rerun()
@@ -206,6 +225,7 @@ else:
     # 展示关键列
     display_cols = [
         "id", "created_at", "name", "backtest_type", "strategy_key", "symbols",
+        "run_type", "experiment_id",
         "start_date", "end_date", "frequency",
         "total_return", "max_drawdown", "sharpe_ratio", "sortino_ratio",
         "calmar_ratio", "annual_return", "win_rate", "trade_count", "notes",
@@ -316,5 +336,34 @@ else:
                 st.bar_chart(chart_df)
             else:
                 st.warning("未找到指定记录")
+        except ValueError:
+            st.error("ID 格式错误")
+
+    st.markdown("---")
+    st.subheader("🧾 导出报告")
+    export_ids = st.text_input("导出记录 ID（逗号分隔）", placeholder="例如: 2,3,5")
+    if export_ids.strip() and st.button("导出 Markdown + CSV"):
+        try:
+            ids = [int(x.strip()) for x in export_ids.split(",") if x.strip()]
+            export_df = df[df["id"].isin(ids)].copy()
+            if export_df.empty:
+                st.warning("未找到要导出的记录")
+            else:
+                report_dir = Path(__file__).resolve().parents[1] / "outputs" / "reports"
+                report_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                csv_path = report_dir / f"report_{ts}.csv"
+                md_path = report_dir / f"report_{ts}.md"
+                export_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+                lines = ["# Backtest Report", "", f"- Export Time: {datetime.now().isoformat(timespec='seconds')}", ""]
+                for _, row in export_df.iterrows():
+                    lines.append(f"## {row.get('name', '')} (ID {row.get('id', '')})")
+                    lines.append(f"- Strategy: `{row.get('strategy_key', '')}`")
+                    lines.append(f"- Symbols: `{row.get('symbols', '')}`")
+                    lines.append(f"- Period: `{row.get('start_date', '')}` ~ `{row.get('end_date', '')}` ({row.get('frequency', '')})")
+                    lines.append(f"- Return: `{row.get('total_return', 0)}` | MaxDD: `{row.get('max_drawdown', 0)}` | Sharpe: `{row.get('sharpe_ratio', 0)}`")
+                    lines.append("")
+                md_path.write_text("\n".join(lines), encoding="utf-8")
+                st.success(f"已导出：{md_path.name}, {csv_path.name}")
         except ValueError:
             st.error("ID 格式错误")

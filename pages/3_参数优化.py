@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-from config import DEFAULT_FEE_RATE, DEFAULT_INITIAL_CASH, DEFAULT_SLIPPAGE, default_end_date
+from config import DATA_DIR, DEFAULT_FEE_RATE, DEFAULT_INITIAL_CASH, DEFAULT_SLIPPAGE, default_end_date
 from src.data_fetcher import fetch_daily_data
 from src.optimizer import optimize_strategy
 from src.strategies import STRATEGY_SPECS, get_strategy_spec
@@ -15,6 +16,23 @@ from src.utils import format_percent
 st.set_page_config(page_title="参数优化", page_icon="⚙️", layout="wide")
 
 st.title("⚙️ 参数优化")
+
+PROFILE_PATH = Path(DATA_DIR) / "optimization_profiles.json"
+
+
+def _load_profiles() -> dict[str, Any]:
+    if not PROFILE_PATH.exists():
+        return {}
+    try:
+        value = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_profiles(profiles: dict[str, Any]) -> None:
+    PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROFILE_PATH.write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
 
 # ────────────────────────────── 侧边栏参数 ──────────────────────────────
 with st.sidebar:
@@ -63,6 +81,37 @@ with st.sidebar:
             base_params[name] = st.number_input(f"{name} (基础)", value=default_value, step=0.1, format="%.4f")
         else:
             base_params[name] = st.text_input(f"{name} (基础)", value=str(default_value))
+
+    st.markdown("---")
+    st.subheader("💾 配置管理")
+    profiles = _load_profiles()
+    profile_names = sorted(profiles.keys())
+    selected_profile = st.selectbox("已保存配置", options=[""] + profile_names, index=0)
+    col_save, col_load = st.columns(2)
+    with col_save:
+        save_profile_name = st.text_input("配置名", value=f"{strategy_key}_{symbol}".replace(" ", "_"))
+        if st.button("保存配置", use_container_width=True):
+            profiles[save_profile_name] = {
+                "strategy_key": strategy_key,
+                "symbol": symbol,
+                "frequency": frequency,
+                "start": start,
+                "end": end,
+                "initial_cash": initial_cash,
+                "fee_rate": fee_rate,
+                "slippage": slippage,
+                "base_params": base_params,
+                "grid_config": {k: st.session_state.get(f"grid_{k}", "") for k in default_params.keys()},
+            }
+            _save_profiles(profiles)
+            st.success("已保存")
+    with col_load:
+        if selected_profile and st.button("加载配置", use_container_width=True):
+            profile = profiles.get(selected_profile, {})
+            for k, v in profile.get("grid_config", {}).items():
+                st.session_state[f"grid_{k}"] = str(v)
+            st.session_state["loaded_opt_profile"] = profile
+            st.success("已加载，点击开始优化即可")
 
     run_btn = st.button("🚀 开始优化", type="primary", use_container_width=True)
 
@@ -138,6 +187,20 @@ if run_btn:
         progress_bar.progress(completed / total)
         status_text.text(f"进度：{completed}/{total}")
 
+    loaded_profile = st.session_state.get("loaded_opt_profile", {})
+    if loaded_profile:
+        base_params = loaded_profile.get("base_params", base_params)
+        symbol = loaded_profile.get("symbol", symbol)
+        frequency = loaded_profile.get("frequency", frequency)
+        start = loaded_profile.get("start", start)
+        end = loaded_profile.get("end", end)
+        initial_cash = float(loaded_profile.get("initial_cash", initial_cash))
+        fee_rate = float(loaded_profile.get("fee_rate", fee_rate))
+        slippage = float(loaded_profile.get("slippage", slippage))
+        if loaded_profile.get("strategy_key") != strategy_key:
+            st.error("已加载配置的策略与当前策略不一致，请切换策略后重试")
+            st.stop()
+
     with st.spinner("正在获取数据并运行参数优化..."):
         try:
             # 先获取数据
@@ -176,6 +239,9 @@ if "last_opt_result" in st.session_state:
         ascending = st.toggle("升序", value=False)
 
         sorted_df = df.sort_values(target_col, ascending=ascending, na_position="last").reset_index(drop=True)
+        dd_threshold = st.number_input("最大回撤阈值（<=0，例 -0.2）", value=0.0, step=0.01, format="%.2f")
+        if "max_drawdown" in sorted_df.columns and dd_threshold < 0:
+            sorted_df = sorted_df[sorted_df["max_drawdown"] >= dd_threshold].reset_index(drop=True)
         st.dataframe(sorted_df, use_container_width=True, hide_index=True)
 
         # Top N 展示
@@ -187,5 +253,19 @@ if "last_opt_result" in st.session_state:
         chart_cols = [c for c in ["total_return", "sharpe_ratio", "max_drawdown"] if c in top_df.columns]
         if chart_cols:
             st.bar_chart(top_df[chart_cols])
+
+        st.markdown("---")
+        st.subheader("📌 保存最优参数")
+        if not sorted_df.empty:
+            best = sorted_df.iloc[0].to_dict()
+            param_keys = list(default_params.keys())
+            best_params = {k: best.get(k, default_params[k]) for k in param_keys}
+            st.json(best_params, expanded=False)
+            if st.button("保存到会话（单标/组合页可复用）"):
+                st.session_state["saved_strategy_params"] = {
+                    "strategy_key": strategy_key,
+                    "params": best_params,
+                }
+                st.success("已保存到会话")
     else:
         st.info("无优化结果")

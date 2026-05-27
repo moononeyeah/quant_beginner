@@ -13,6 +13,16 @@ from config import DEFAULT_TEST_SYMBOLS, default_end_date
 from src.data_fetcher import fetch_daily_data
 
 
+INDEX_SYMBOLS = {
+    "000016", "000300", "000688", "000852", "000905", "000985",
+    "399001", "399006",
+}
+
+
+def is_index_symbol(symbol: str) -> bool:
+    return str(symbol).strip() in INDEX_SYMBOLS
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="批量更新本地测试行情缓存")
     parser.add_argument("--symbols", default=",".join(DEFAULT_TEST_SYMBOLS), help="代码列表，逗号分隔")
@@ -54,6 +64,9 @@ def main() -> None:
     print(f"开始更新分钟线样本：{start_text} -> {end_text}")
 
     for symbol in symbols:
+        if is_index_symbol(symbol):
+            print(f"[{args.minute_period}m] {symbol}: 跳过（指数代码默认不拉取分钟线）")
+            continue
         try:
             minute_df = fetch_daily_data(
                 symbol=symbol,

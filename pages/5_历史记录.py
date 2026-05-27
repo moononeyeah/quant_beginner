@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from main import run_pipeline, run_portfolio_pipeline
 
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "backtest_history.db"
 
@@ -121,6 +122,16 @@ def delete_record(record_id: int) -> None:
     conn.close()
 
 
+def _parse_strategy_params(raw: str) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
 st.set_page_config(page_title="历史记录", page_icon="📚", layout="wide")
 
 st.title("📚 历史记录")
@@ -210,6 +221,86 @@ else:
         delete_record(delete_id)
         st.success(f"已删除记录 #{delete_id}")
         st.rerun()
+
+    st.markdown("---")
+    st.subheader("🔁 一键复跑")
+    rerun_id = st.number_input("输入要复跑的记录 ID", value=0, step=1, min_value=0, key="rerun_id")
+    if rerun_id > 0 and st.button("开始复跑", type="primary"):
+        rec_df = df[df["id"] == int(rerun_id)]
+        if rec_df.empty:
+            st.error("未找到对应记录")
+            st.stop()
+        rec = rec_df.iloc[0]
+        strategy_params = _parse_strategy_params(str(rec.get("strategy_params", "")))
+        start_date = str(rec.get("start_date", ""))
+        end_date = str(rec.get("end_date", ""))
+        frequency = str(rec.get("frequency", "daily") or "daily")
+        initial_cash = float(rec.get("initial_cash", 100000.0))
+        fee_rate = float(rec.get("fee_rate", 0.0003))
+        slippage = float(rec.get("slippage", 0.0))
+        strategy_key = str(rec.get("strategy_key", "double_ma"))
+        symbols = str(rec.get("symbols", "")).strip()
+        backtest_type = str(rec.get("backtest_type", "single"))
+
+        if not start_date or not end_date or not symbols:
+            st.error("该历史记录缺少关键参数（symbols/start/end），无法复跑")
+            st.stop()
+
+        with st.spinner("正在复跑历史记录..."):
+            try:
+                if backtest_type == "portfolio":
+                    symbol_list = [s.strip() for s in symbols.split(",") if s.strip()]
+                    _, result, actual_symbols = run_portfolio_pipeline(
+                        symbols=symbol_list,
+                        start=start_date,
+                        end=end_date,
+                        initial_cash=initial_cash,
+                        fee_rate=fee_rate,
+                        slippage=slippage,
+                        strategy_name=strategy_key,
+                        strategy_params=strategy_params,
+                    )
+                    st.session_state["last_portfolio_result"] = result
+                    st.session_state["last_portfolio_symbols"] = actual_symbols
+                    st.session_state["last_portfolio_strategy"] = strategy_key
+                    st.session_state["last_portfolio_context"] = {
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "frequency": frequency,
+                        "initial_cash": initial_cash,
+                        "fee_rate": fee_rate,
+                        "slippage": slippage,
+                        "strategy_params": strategy_params,
+                    }
+                else:
+                    symbol = symbols.split(",")[0].strip()
+                    _, result, _, _, _, symbol_label = run_pipeline(
+                        symbol=symbol,
+                        start=start_date,
+                        end=end_date,
+                        initial_cash=initial_cash,
+                        fee_rate=fee_rate,
+                        slippage=slippage,
+                        frequency=frequency,
+                        strategy_name=strategy_key,
+                        strategy_params=strategy_params,
+                    )
+                    st.session_state["last_single_result"] = result
+                    st.session_state["last_single_symbol"] = symbol_label
+                    st.session_state["last_single_strategy"] = strategy_key
+                    st.session_state["last_single_context"] = {
+                        "start_date": start_date,
+                        "end_date": end_date,
+                        "frequency": frequency,
+                        "initial_cash": initial_cash,
+                        "fee_rate": fee_rate,
+                        "slippage": slippage,
+                        "strategy_params": strategy_params,
+                    }
+            except Exception as exc:
+                st.error(f"复跑失败：{exc}")
+                st.stop()
+        st.success("复跑完成，结果已写入当前会话。可前往对应页面查看。")
 
     # 对比功能
     st.markdown("---")

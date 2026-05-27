@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import streamlit as st
+from src.data_fetcher import load_data_health
 
 st.set_page_config(
     page_title="Quant Beginner",
@@ -12,6 +13,20 @@ st.set_page_config(
 st.sidebar.title("📈 Quant Beginner")
 st.sidebar.markdown("按 vn.py 风格重建的量化回测平台")
 st.sidebar.markdown("---")
+st.sidebar.subheader("🩺 数据状态")
+try:
+    health_df = load_data_health(limit=8)
+    if health_df.empty:
+        st.sidebar.caption("暂无拉取记录")
+    else:
+        st.sidebar.dataframe(
+            health_df[["ts", "symbol", "frequency", "status", "latest_bar"]],
+            use_container_width=True,
+            hide_index=True,
+            height=240,
+        )
+except Exception:
+    st.sidebar.caption("数据状态读取失败")
 
 st.title("🚀 Quant Beginner")
 st.markdown(

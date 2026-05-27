@@ -49,19 +49,22 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🔧 策略参数")
     default_params = spec.default_parameters
+    session_saved = st.session_state.get("saved_strategy_params", {})
+    pref_params = session_saved.get("params", {}) if session_saved.get("strategy_key") == strategy_key else {}
     param_df = get_strategy_parameter_table(strategy_key)
 
     # 用 data_editor 编辑参数
     edited_params: dict[str, Any] = {}
     for name, default_value in default_params.items():
+        value = pref_params.get(name, default_value)
         if isinstance(default_value, bool):
-            edited_params[name] = st.toggle(name, value=default_value, help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
+            edited_params[name] = st.toggle(name, value=bool(value), help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
         elif isinstance(default_value, int):
-            edited_params[name] = st.number_input(name, value=default_value, step=1, format="%d", help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
+            edited_params[name] = st.number_input(name, value=int(value), step=1, format="%d", help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
         elif isinstance(default_value, float):
-            edited_params[name] = st.number_input(name, value=default_value, step=0.1, format="%.4f", help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
+            edited_params[name] = st.number_input(name, value=float(value), step=0.1, format="%.4f", help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
         else:
-            edited_params[name] = st.text_input(name, value=str(default_value), help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
+            edited_params[name] = st.text_input(name, value=str(value), help=param_df[param_df["参数名"] == name]["中文解释"].values[0] if not param_df.empty else "")
 
     run_btn = st.button("🚀 开始回测", type="primary", use_container_width=True)
 

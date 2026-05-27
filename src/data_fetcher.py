@@ -3,6 +3,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 import re
+import sqlite3
+import time
+from datetime import datetime
 
 import pandas as pd
 
@@ -12,6 +15,19 @@ from src.utils import ensure_dir, normalize_date, normalize_datetime
 
 STANDARD_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 SUPPORTED_FREQUENCIES = {"daily", "1", "5", "15", "30", "60"}
+HEALTH_DB_PATH = DATA_DIR / "data_health.db"
+
+
+INDEX_SYMBOLS = {
+    "000016", "000300", "000688", "000852", "000905", "000985",
+    "399001", "399006",
+}
+
+
+def _is_index_symbol(symbol: str) -> bool:
+    """判断是否为常见指数代码（白名单，避免把 000001 误识别为指数）。"""
+    text = str(symbol).strip()
+    return text in INDEX_SYMBOLS
 
 
 def _cache_key_part(value: str) -> str:
@@ -158,12 +174,23 @@ def _import_akshare():
     return ak
 
 
-def _fetch_daily(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
+def _fetch_daily(symbol: str, start_date: str, end_date: str) -> tuple[pd.DataFrame, str]:
     """优先按 ETF 获取日线，失败后按 A 股股票获取。"""
     _require_supported_python()
     ak = _import_akshare()
 
     errors: list[str] = []
+    if _is_index_symbol(symbol):
+        try:
+            return ak.index_zh_a_hist(
+                symbol=symbol,
+                period="daily",
+                start_date=start_date,
+                end_date=end_date,
+            ), "index_zh_a_hist"
+        except Exception as exc:
+            errors.append(f"A股指数日线接口失败：{exc}")
+
     try:
         return ak.fund_etf_hist_em(
             symbol=symbol,
@@ -171,7 +198,7 @@ def _fetch_daily(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
             start_date=start_date,
             end_date=end_date,
             adjust="qfq",
-        )
+        ), "fund_etf_hist_em"
     except Exception as exc:
         errors.append(f"ETF 日线接口失败：{exc}")
 
@@ -182,14 +209,14 @@ def _fetch_daily(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
             start_date=start_date,
             end_date=end_date,
             adjust="qfq",
-        )
+        ), "stock_zh_a_hist"
     except Exception as exc:
         errors.append(f"A股日线接口失败：{exc}")
 
     raise RuntimeError("无法获取日线行情；" + "；".join(errors))
 
 
-def _fetch_minute(symbol: str, start_date: str, end_date: str, period: str) -> pd.DataFrame:
+def _fetch_minute(symbol: str, start_date: str, end_date: str, period: str) -> tuple[pd.DataFrame, str]:
     """优先按 ETF 获取分钟线，失败后按 A 股股票获取。"""
     _require_supported_python()
     ak = _import_akshare()
@@ -202,7 +229,7 @@ def _fetch_minute(symbol: str, start_date: str, end_date: str, period: str) -> p
             end_date=end_date,
             period=period,
             adjust="" if period == "1" else "qfq",
-        )
+        ), "fund_etf_hist_min_em"
     except Exception as exc:
         errors.append(f"ETF 分钟线接口失败：{exc}")
 
@@ -213,13 +240,89 @@ def _fetch_minute(symbol: str, start_date: str, end_date: str, period: str) -> p
             end_date=end_date,
             period=period,
             adjust="" if period == "1" else "qfq",
-        )
+        ), "stock_zh_a_hist_min_em"
     except Exception as exc:
         errors.append(f"A股分钟线接口失败：{exc}")
 
     raise RuntimeError(
         "无法获取分钟线数据；分钟线通常只能获取近期数据，1 分钟一般仅支持近 5 个交易日；" + "；".join(errors)
     )
+
+
+def _init_health_db() -> None:
+    ensure_dir(DATA_DIR)
+    conn = sqlite3.connect(str(HEALTH_DB_PATH))
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS data_fetch_health (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            source TEXT,
+            status TEXT NOT NULL,
+            rows_count INTEGER NOT NULL,
+            latest_bar TEXT,
+            error_message TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def _log_fetch_health(
+    symbol: str,
+    frequency: str,
+    start_date: str,
+    end_date: str,
+    status: str,
+    rows_count: int = 0,
+    latest_bar: str = "",
+    source: str = "",
+    error_message: str = "",
+) -> None:
+    try:
+        _init_health_db()
+        conn = sqlite3.connect(str(HEALTH_DB_PATH))
+        conn.execute(
+            """
+            INSERT INTO data_fetch_health
+            (ts, symbol, frequency, start_date, end_date, source, status, rows_count, latest_bar, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now().isoformat(timespec="seconds"),
+                symbol,
+                frequency,
+                start_date,
+                end_date,
+                source,
+                status,
+                int(rows_count),
+                latest_bar,
+                error_message[:500],
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def load_data_health(limit: int = 20) -> pd.DataFrame:
+    _init_health_db()
+    conn = sqlite3.connect(str(HEALTH_DB_PATH))
+    df = pd.read_sql_query(
+        "SELECT ts, symbol, frequency, source, status, rows_count, latest_bar, error_message "
+        "FROM data_fetch_health ORDER BY id DESC LIMIT ?",
+        conn,
+        params=(int(limit),),
+    )
+    conn.close()
+    return df
 
 
 def fetch_daily_data(
@@ -229,6 +332,8 @@ def fetch_daily_data(
     frequency: str = "daily",
     use_cache: bool = True,
     cache_dir: Path = DATA_DIR,
+    max_retries: int = 3,
+    retry_backoff_seconds: float = 1.0,
 ) -> pd.DataFrame:
     """获取 A 股或 ETF 的日线或分钟线数据，并返回统一字段的 DataFrame。"""
     symbol = str(symbol).strip()
@@ -264,19 +369,48 @@ def fetch_daily_data(
             compatible_cache.to_csv(cache_file, index=False)
             return compatible_cache
 
-    try:
-        if frequency == "daily":
-            raw_df = _fetch_daily(symbol, start, end)
-            df = _rename_columns(raw_df, mode="日线")
-        else:
-            raw_df = _fetch_minute(symbol, start, end, frequency)
-            df = _rename_columns(raw_df, mode="分钟线")
-    except Exception as exc:
+    source_name = ""
+    last_exc: Exception | None = None
+    for attempt in range(max(1, int(max_retries))):
+        try:
+            if frequency == "daily":
+                raw_df, source_name = _fetch_daily(symbol, start, end)
+                df = _rename_columns(raw_df, mode="日线")
+            else:
+                raw_df, source_name = _fetch_minute(symbol, start, end, frequency)
+                df = _rename_columns(raw_df, mode="分钟线")
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max(1, int(max_retries)) - 1:
+                time.sleep(max(float(retry_backoff_seconds), 0.1) * (2 ** attempt))
+            continue
+    else:
+        exc = last_exc if last_exc else RuntimeError("未知数据获取异常")
         if use_cache:
             compatible_cache = _find_best_compatible_cache(symbol, start, end, frequency, cache_dir)
             if compatible_cache is not None:
                 compatible_cache.to_csv(cache_file, index=False)
+                _log_fetch_health(
+                    symbol=symbol,
+                    frequency=frequency,
+                    start_date=start,
+                    end_date=end,
+                    status="cache_fallback",
+                    rows_count=len(compatible_cache),
+                    latest_bar=str(pd.to_datetime(compatible_cache["date"]).max()) if not compatible_cache.empty else "",
+                    source="local_cache",
+                    error_message=str(exc),
+                )
                 return compatible_cache
+        _log_fetch_health(
+            symbol=symbol,
+            frequency=frequency,
+            start_date=start,
+            end_date=end,
+            status="failed",
+            error_message=str(exc),
+        )
         raise exc
 
     df["date"] = pd.to_datetime(df["date"])
@@ -285,9 +419,21 @@ def fetch_daily_data(
     df = df.dropna(subset=STANDARD_COLUMNS).sort_values("date").reset_index(drop=True)
     if df.empty:
         if frequency == "daily":
+            _log_fetch_health(symbol, frequency, start, end, status="failed", error_message="日线数据为空")
             raise ValueError("获取到的日线数据为空，请检查代码、日期区间或网络连接")
+        _log_fetch_health(symbol, frequency, start, end, status="failed", error_message="分钟线数据为空")
         raise ValueError("获取到的分钟线数据为空，请检查代码、时间区间或网络连接")
 
     if use_cache:
         df.to_csv(cache_file, index=False)
+    _log_fetch_health(
+        symbol=symbol,
+        frequency=frequency,
+        start_date=start,
+        end_date=end,
+        status="success",
+        rows_count=len(df),
+        latest_bar=str(df["date"].max()),
+        source=source_name,
+    )
     return df

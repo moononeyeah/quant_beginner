@@ -178,6 +178,8 @@ def run_portfolio_pipeline(
     strategy_name: str = "double_ma",
     weights: dict[str, float] | None = None,
     strategy_params: dict[str, Any] | None = None,
+    max_symbol_weight: float | None = None,
+    max_drawdown_stop: float | None = None,
 ):
     """运行组合回测流水线。"""
     from src.rotation_strategy import fetch_rotation_data
@@ -192,6 +194,8 @@ def run_portfolio_pipeline(
         initial_cash=initial_cash,
         fee_rate=fee_rate,
         slippage=slippage,
+        max_symbol_weight=max_symbol_weight,
+        max_drawdown_stop=max_drawdown_stop,
     )
     return price_data, result, symbols
 

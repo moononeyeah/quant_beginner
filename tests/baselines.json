@@ -1,0 +1,38 @@
+{
+  "cases": [
+    {
+      "name": "double_ma_510300_daily",
+      "strategy": "double_ma",
+      "symbol": "510300",
+      "frequency": "daily",
+      "start": "20230101",
+      "end": "20250530",
+      "params": {
+        "fast_window": 10,
+        "slow_window": 20
+      },
+      "tolerance": {
+        "total_return_abs": 0.25,
+        "max_drawdown_abs": 0.25
+      }
+    },
+    {
+      "name": "atr_rsi_510300_daily",
+      "strategy": "atr_rsi",
+      "symbol": "510300",
+      "frequency": "daily",
+      "start": "20230101",
+      "end": "20250530",
+      "params": {
+        "atr_length": 22,
+        "atr_ma_length": 10,
+        "rsi_length": 5,
+        "rsi_entry": 16
+      },
+      "tolerance": {
+        "total_return_abs": 0.35,
+        "max_drawdown_abs": 0.35
+      }
+    }
+  ]
+}

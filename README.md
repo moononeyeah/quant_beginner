@@ -123,6 +123,9 @@ streamlit run app.py
 | ⚙️ 参数优化 | 设置参数网格，支持并行/串行优化，结果可筛选、保存配置并复用到回测页 |
 | 📋 策略管理 | 查看所有内置策略的目录、参数定义和源码 |
 | 📚 历史记录 | 回测结果自动保存到 SQLite，支持多组对比、删除和一键复跑 |
+| 🧪 滚动验证 | Walk-Forward：训练窗口优化 + 验证窗口回测 |
+| 🛡️ 稳健性与成本 | 参数扰动、时间扰动、手续费/滑点压力测试 |
+| 🧭 实验中心 | 按 experiment_id/run_type 聚合查看实验结果 |
 
 ## 内置策略
 
@@ -222,6 +225,12 @@ python examples/update_test_data.py --with-minute --minute-period 5 --minute-day
 ```
 
 说明：脚本会对指数代码自动跳过分钟线拉取，避免接口不支持导致批量任务中断。
+
+回归检查（结果漂移检测）：
+
+```bash
+python tests/regression_check.py
+```
 
 ## 版本历史
 

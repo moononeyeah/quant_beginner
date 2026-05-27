@@ -57,6 +57,8 @@ with st.sidebar:
     initial_cash = st.number_input("总资金", value=DEFAULT_INITIAL_CASH, step=10000.0, format="%.2f")
     fee_rate = st.number_input("手续费率", value=DEFAULT_FEE_RATE, step=0.0001, format="%.6f")
     slippage = st.number_input("滑点", value=DEFAULT_SLIPPAGE, step=0.0001, format="%.6f")
+    max_symbol_weight = st.number_input("单标最大权重(0-1, 0=不限制)", value=0.0, step=0.05, min_value=0.0, max_value=1.0)
+    max_drawdown_stop = st.number_input("组合回撤止损阈值(负值, 0=关闭)", value=0.0, step=0.05, format="%.2f")
 
     # 策略参数编辑
     st.markdown("---")
@@ -99,6 +101,8 @@ if run_btn:
                 strategy_name=strategy_key,
                 weights=weights,
                 strategy_params=edited_params,
+                max_symbol_weight=max_symbol_weight if max_symbol_weight > 0 else None,
+                max_drawdown_stop=max_drawdown_stop if max_drawdown_stop < 0 else None,
             )
         except Exception as exc:
             st.error(f"组合回测失败：{exc}")
@@ -115,6 +119,8 @@ if run_btn:
         "fee_rate": float(fee_rate),
         "slippage": float(slippage),
         "strategy_params": edited_params,
+        "max_symbol_weight": float(max_symbol_weight),
+        "max_drawdown_stop": float(max_drawdown_stop),
     }
 
     st.success(f"组合回测完成！标的数：{len(actual_symbols)}")

@@ -45,18 +45,36 @@ def _allocate_capital(
     symbols: list[str],
     total_capital: float,
     weights: dict[str, float] | None = None,
+    max_symbol_weight: float | None = None,
 ) -> dict[str, float]:
     """按权重分配资金，默认等权。"""
     if weights:
         total_weight = sum(weights.get(s, 0.0) for s in symbols)
         if total_weight <= 0:
             raise ValueError("权重总和必须大于 0")
-        return {
+        base_alloc = {
             s: total_capital * (weights.get(s, 0.0) / total_weight)
             for s in symbols
         }
-    n = len(symbols)
-    return {s: total_capital / n for s in symbols}
+    else:
+        n = len(symbols)
+        base_alloc = {s: total_capital / n for s in symbols}
+
+    if max_symbol_weight is None or max_symbol_weight <= 0:
+        return base_alloc
+
+    max_capital = total_capital * float(max_symbol_weight)
+    capped = {s: min(v, max_capital) for s, v in base_alloc.items()}
+    remaining = total_capital - sum(capped.values())
+    if remaining <= 0:
+        return capped
+    uncapped_symbols = [s for s in symbols if capped[s] < max_capital]
+    if not uncapped_symbols:
+        return capped
+    add_each = remaining / len(uncapped_symbols)
+    for s in uncapped_symbols:
+        capped[s] = min(capped[s] + add_each, max_capital)
+    return capped
 
 
 def _merge_daily_results(
@@ -153,6 +171,8 @@ class PortfolioBacktestEngine:
         size: float = 1.0,
         pricetick: float = 0.01,
         capital: float = 100000.0,
+        max_symbol_weight: float | None = None,
+        max_drawdown_stop: float | None = None,
     ) -> None:
         if data.empty:
             raise ValueError("无法回测：数据为空")
@@ -174,6 +194,8 @@ class PortfolioBacktestEngine:
         self.pricetick = float(pricetick) if pricetick > 0 else 0.01
         self.capital = float(capital)
         self.weights = weights
+        self.max_symbol_weight = max_symbol_weight
+        self.max_drawdown_stop = max_drawdown_stop
 
         # 按 symbol 切分数据
         self.symbol_data: dict[str, pd.DataFrame] = {
@@ -187,7 +209,12 @@ class PortfolioBacktestEngine:
         self.symbols = list(self.symbol_data.keys())
 
         # 资金分配
-        self.symbol_capital = _allocate_capital(self.symbols, self.capital, self.weights)
+        self.symbol_capital = _allocate_capital(
+            self.symbols,
+            self.capital,
+            self.weights,
+            self.max_symbol_weight,
+        )
 
     def run_backtesting(self) -> PortfolioBacktestResult:
         """运行组合回测。"""
@@ -212,6 +239,21 @@ class PortfolioBacktestEngine:
         merged_daily = _merge_daily_results(per_symbol_results, self.capital)
         merged_trades = _merge_trades(per_symbol_results)
         logs = _merge_logs(per_symbol_results)
+
+        if not merged_daily.empty and self.max_drawdown_stop is not None and self.max_drawdown_stop < 0:
+            highlevel = merged_daily["equity"].expanding().max()
+            ddpercent = merged_daily["equity"] / highlevel - 1
+            breach = ddpercent <= float(self.max_drawdown_stop)
+            if breach.any():
+                first_idx = int(breach.idxmax())
+                if first_idx + 1 < len(merged_daily):
+                    merged_daily.loc[first_idx + 1:, "net_pnl"] = 0.0
+                    merged_daily.loc[first_idx + 1:, "trade_count"] = 0
+                    merged_daily["equity"] = merged_daily["net_pnl"].cumsum() + self.capital
+                    logs.append(
+                        f"[RISK] 触发组合回撤阈值 {self.max_drawdown_stop:.2%}，"
+                        f"于 {merged_daily.loc[first_idx, 'date']} 后停止新增交易（净值冻结）"
+                    )
 
         # 计算组合级统计
         total_return = 0.0
@@ -288,6 +330,8 @@ def run_portfolio_backtest(
     slippage: float = 0.0,
     size: float = 1.0,
     pricetick: float = 0.01,
+    max_symbol_weight: float | None = None,
+    max_drawdown_stop: float | None = None,
 ) -> PortfolioBacktestResult:
     """
     便捷的组合回测入口。
@@ -321,5 +365,7 @@ def run_portfolio_backtest(
         size=size,
         pricetick=pricetick,
         capital=initial_cash,
+        max_symbol_weight=max_symbol_weight,
+        max_drawdown_stop=max_drawdown_stop,
     )
     return engine.run_backtesting()

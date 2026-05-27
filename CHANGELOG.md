@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.3.0 - Stability, Reproducibility & Workflow UX
+
+### Added
+
+- **Data fetch resilience and health tracking** (`src/data_fetcher.py`):
+  - Retry with exponential backoff for data fetching.
+  - Local cache fallback path when upstream fetch fails.
+  - SQLite-based data health log (`data/data_health.db`) for each fetch request.
+  - `load_data_health()` API for frontend status display.
+  - Index daily data compatibility branch for common index symbols (including `000300`).
+- **Data status panel** (`app.py`):
+  - Sidebar health table showing recent fetch time, symbol, frequency, status and latest bar.
+- **History rerun workflow** (`pages/5_历史记录.py`):
+  - One-click rerun by record ID, restoring saved parameters and writing results back to session.
+- **Optimization workflow improvements** (`pages/3_参数优化.py`):
+  - Save/load optimization profiles (`data/optimization_profiles.json`).
+  - Drawdown threshold filter before ranking.
+  - Save best parameters to session for reuse in backtest pages.
+- **Batch data update script** (`examples/update_test_data.py`):
+  - Broader default symbol set.
+  - Optional minute sample update.
+  - Skip minute fetch for index symbols to avoid unsupported API paths.
+
+### Changed
+
+- **Backtest reproducibility context**:
+  - Single/portfolio pages persist full run context (start/end/frequency/costs/params).
+  - History save now writes actual run context instead of placeholder defaults.
+- **Optimizer execution control**:
+  - Parameter optimization page now correctly respects parallel toggle.
+- **Strategy safety validation**:
+  - Unified parameter validation is enforced in backtest/optimization paths.
+  - Common window constraints (e.g., `fast_window < slow_window`) are validated early.
+- **README**:
+  - Updated for new data resilience, optimization profile workflow, and history rerun features.
+
 ## v0.2.0 - Performance, Optimization & Portfolio Backtesting
 
 ### Added
